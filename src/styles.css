@@ -1,0 +1,491 @@
+import { useEffect, useMemo, useState } from 'react';
+
+const EMPTY_MEDICINE = {
+  name: '',
+  category: '',
+  batch: '',
+  stock: 0,
+  purchasePrice: 0,
+  sellingPrice: 0,
+};
+
+const EMPTY_CUSTOMER = {
+  name: '',
+  phone: '',
+  type: 'Retail',
+  creditLimit: 0,
+};
+
+const EMPTY_SALE = {
+  customerId: '',
+  medicineId: '',
+  quantity: 1,
+};
+
+const formatCurrency = (value) =>
+  new Intl.NumberFormat('en-PK', {
+    style: 'currency',
+    currency: 'PKR',
+    maximumFractionDigits: 0,
+  }).format(value || 0);
+
+async function fetchJson(url, options) {
+  const response = await fetch(url, options);
+  if (!response.ok) {
+    const error = await response.text();
+    throw new Error(error || 'Request failed');
+  }
+  return response.json();
+}
+
+function App() {
+  const [overview, setOverview] = useState({
+    totalInventoryValue: 0,
+    totalSales: 0,
+    customerCount: 0,
+    gstDue: 0,
+    lowStockItems: 0,
+  });
+  const [medicines, setMedicines] = useState([]);
+  const [customers, setCustomers] = useState([]);
+  const [sales, setSales] = useState([]);
+  const [ledger, setLedger] = useState([]);
+  const [fbrData, setFbrData] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState('');
+  const [medicineForm, setMedicineForm] = useState(EMPTY_MEDICINE);
+  const [customerForm, setCustomerForm] = useState(EMPTY_CUSTOMER);
+  const [saleForm, setSaleForm] = useState(EMPTY_SALE);
+
+  const loadData = async () => {
+    setLoading(true);
+    setError('');
+
+    try {
+      const [overviewData, medicinesData, customersData, salesData, ledgerData, fbrSummary] =
+        await Promise.all([
+          fetchJson('/api/overview'),
+          fetchJson('/api/medicines'),
+          fetchJson('/api/customers'),
+          fetchJson('/api/sales'),
+          fetchJson('/api/ledger'),
+          fetchJson('/api/fbr'),
+        ]);
+
+      setOverview(overviewData);
+      setMedicines(medicinesData);
+      setCustomers(customersData);
+      setSales(salesData);
+      setLedger(ledgerData);
+      setFbrData(fbrSummary);
+
+      if (saleForm.customerId === '' && customersData[0]) {
+        setSaleForm((current) => ({ ...current, customerId: customersData[0].id }));
+      }
+      if (saleForm.medicineId === '' && medicinesData[0]) {
+        setSaleForm((current) => ({ ...current, medicineId: medicinesData[0].id }));
+      }
+    } catch (loadError) {
+      setError(loadError.message || 'Unable to load dashboard data');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    loadData();
+  }, []);
+
+  const handleAddMedicine = async (event) => {
+    event.preventDefault();
+
+    try {
+      await fetchJson('/api/medicines', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          ...medicineForm,
+          stock: Number(medicineForm.stock),
+          purchasePrice: Number(medicineForm.purchasePrice),
+          sellingPrice: Number(medicineForm.sellingPrice),
+        }),
+      });
+
+      setMedicineForm(EMPTY_MEDICINE);
+      await loadData();
+    } catch (submitError) {
+      setError(submitError.message || 'Unable to add medicine');
+    }
+  };
+
+  const handleAddCustomer = async (event) => {
+    event.preventDefault();
+
+    try {
+      await fetchJson('/api/customers', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          ...customerForm,
+          creditLimit: Number(customerForm.creditLimit),
+        }),
+      });
+
+      setCustomerForm(EMPTY_CUSTOMER);
+      await loadData();
+    } catch (submitError) {
+      setError(submitError.message || 'Unable to add customer');
+    }
+  };
+
+  const handleAddSale = async (event) => {
+    event.preventDefault();
+
+    try {
+      await fetchJson('/api/sales', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          ...saleForm,
+          quantity: Number(saleForm.quantity),
+        }),
+      });
+
+      setSaleForm((current) => ({ ...current, quantity: 1 }));
+      await loadData();
+    } catch (submitError) {
+      setError(submitError.message || 'Unable to record sale');
+    }
+  };
+
+  const lowStockMedicines = useMemo(
+    () => medicines.filter((item) => item.stock <= 10),
+    [medicines]
+  );
+
+  return (
+    <div className="app-shell">
+      <header className="topbar">
+        <div>
+          <p className="eyebrow">PHARMACY OPERATIONS</p>
+          <h1>PharmaCare PK</h1>
+        </div>
+        <button className="primary-button" onClick={loadData}>
+          Refresh data
+        </button>
+      </header>
+
+      {error ? <div className="alert">{error}</div> : null}
+
+      {loading ? (
+        <div className="loading">Loading pharmacy dashboard...</div>
+      ) : (
+        <>
+          <section className="stats-grid">
+            <StatCard label="Inventory Value" value={formatCurrency(overview.totalInventoryValue)} accent="blue" />
+            <StatCard label="Monthly Sales" value={formatCurrency(overview.totalSales)} accent="green" />
+            <StatCard label="Customers" value={String(overview.customerCount)} accent="violet" />
+            <StatCard label="GST Due" value={formatCurrency(overview.gstDue)} accent="amber" />
+          </section>
+
+          <section className="status-banner">
+            <span>{overview.lowStockItems} medicines are low in stock</span>
+            {lowStockMedicines.length > 0 ? (
+              <strong>{lowStockMedicines.map((item) => item.name).join(', ')}</strong>
+            ) : (
+              <strong>All stocked properly</strong>
+            )}
+          </section>
+
+          <section className="content-grid">
+            <div className="panel">
+              <h2>Add medicine</h2>
+              <form onSubmit={handleAddMedicine} className="stack-form">
+                <input
+                  value={medicineForm.name}
+                  onChange={(event) =>
+                    setMedicineForm((current) => ({ ...current, name: event.target.value }))
+                  }
+                  placeholder="Medicine name"
+                  required
+                />
+                <input
+                  value={medicineForm.category}
+                  onChange={(event) =>
+                    setMedicineForm((current) => ({ ...current, category: event.target.value }))
+                  }
+                  placeholder="Category"
+                  required
+                />
+                <input
+                  value={medicineForm.batch}
+                  onChange={(event) =>
+                    setMedicineForm((current) => ({ ...current, batch: event.target.value }))
+                  }
+                  placeholder="Batch code"
+                  required
+                />
+                <div className="two-column">
+                  <input
+                    type="number"
+                    min="0"
+                    value={medicineForm.stock}
+                    onChange={(event) =>
+                      setMedicineForm((current) => ({ ...current, stock: event.target.value }))
+                    }
+                    placeholder="Stock"
+                    required
+                  />
+                  <input
+                    type="number"
+                    min="0"
+                    value={medicineForm.purchasePrice}
+                    onChange={(event) =>
+                      setMedicineForm((current) => ({ ...current, purchasePrice: event.target.value }))
+                    }
+                    placeholder="Purchase price"
+                    required
+                  />
+                </div>
+                <input
+                  type="number"
+                  min="0"
+                  value={medicineForm.sellingPrice}
+                  onChange={(event) =>
+                    setMedicineForm((current) => ({ ...current, sellingPrice: event.target.value }))
+                  }
+                  placeholder="Selling price"
+                  required
+                />
+                <button type="submit" className="primary-button wide-button">
+                  Save medicine
+                </button>
+              </form>
+            </div>
+
+            <div className="panel">
+              <h2>Add customer</h2>
+              <form onSubmit={handleAddCustomer} className="stack-form">
+                <input
+                  value={customerForm.name}
+                  onChange={(event) =>
+                    setCustomerForm((current) => ({ ...current, name: event.target.value }))
+                  }
+                  placeholder="Customer name"
+                  required
+                />
+                <input
+                  value={customerForm.phone}
+                  onChange={(event) =>
+                    setCustomerForm((current) => ({ ...current, phone: event.target.value }))
+                  }
+                  placeholder="Phone number"
+                  required
+                />
+                <select
+                  value={customerForm.type}
+                  onChange={(event) =>
+                    setCustomerForm((current) => ({ ...current, type: event.target.value }))
+                  }
+                >
+                  <option value="Retail">Retail</option>
+                  <option value="Wholesale">Wholesale</option>
+                  <option value="Institution">Institution</option>
+                </select>
+                <input
+                  type="number"
+                  min="0"
+                  value={customerForm.creditLimit}
+                  onChange={(event) =>
+                    setCustomerForm((current) => ({ ...current, creditLimit: event.target.value }))
+                  }
+                  placeholder="Credit limit"
+                  required
+                />
+                <button type="submit" className="primary-button wide-button">
+                  Save customer
+                </button>
+              </form>
+            </div>
+
+            <div className="panel wide-panel">
+              <h2>Record new sale</h2>
+              <form onSubmit={handleAddSale} className="stack-form sale-form">
+                <div className="two-column">
+                  <select
+                    value={saleForm.customerId}
+                    onChange={(event) =>
+                      setSaleForm((current) => ({ ...current, customerId: event.target.value }))
+                    }
+                    required
+                  >
+                    <option value="">Select customer</option>
+                    {customers.map((customer) => (
+                      <option key={customer.id} value={customer.id}>
+                        {customer.name}
+                      </option>
+                    ))}
+                  </select>
+                  <select
+                    value={saleForm.medicineId}
+                    onChange={(event) =>
+                      setSaleForm((current) => ({ ...current, medicineId: event.target.value }))
+                    }
+                    required
+                  >
+                    <option value="">Select medicine</option>
+                    {medicines.map((medicine) => (
+                      <option key={medicine.id} value={medicine.id}>
+                        {medicine.name} ({medicine.stock} in stock)
+                      </option>
+                    ))}
+                  </select>
+                </div>
+                <input
+                  type="number"
+                  min="1"
+                  value={saleForm.quantity}
+                  onChange={(event) =>
+                    setSaleForm((current) => ({ ...current, quantity: event.target.value }))
+                  }
+                  placeholder="Quantity"
+                  required
+                />
+                <button type="submit" className="primary-button wide-button">
+                  Record sale
+                </button>
+              </form>
+            </div>
+          </section>
+
+          <section className="tables-grid">
+            <div className="panel">
+              <h2>Inventory</h2>
+              <table>
+                <thead>
+                  <tr>
+                    <th>Medicine</th>
+                    <th>Stock</th>
+                    <th>Price</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {medicines.map((medicine) => (
+                    <tr key={medicine.id} className={medicine.stock <= 10 ? 'warning-row' : ''}>
+                      <td>{medicine.name}</td>
+                      <td>{medicine.stock}</td>
+                      <td>{formatCurrency(medicine.sellingPrice)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+
+            <div className="panel">
+              <h2>Customers</h2>
+              <table>
+                <thead>
+                  <tr>
+                    <th>Name</th>
+                    <th>Type</th>
+                    <th>Balance</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {customers.map((customer) => (
+                    <tr key={customer.id}>
+                      <td>{customer.name}</td>
+                      <td>{customer.type}</td>
+                      <td>{formatCurrency(customer.balance || 0)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+
+            <div className="panel wide-panel">
+              <h2>Recent sales</h2>
+              <table>
+                <thead>
+                  <tr>
+                    <th>Medicine</th>
+                    <th>Customer</th>
+                    <th>Qty</th>
+                    <th>Total</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {sales.map((sale) => (
+                    <tr key={sale.id}>
+                      <td>{sale.medicineName}</td>
+                      <td>{sale.customerName}</td>
+                      <td>{sale.quantity}</td>
+                      <td>{formatCurrency(sale.total)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+
+            <div className="panel wide-panel">
+              <h2>Ledger</h2>
+              <table>
+                <thead>
+                  <tr>
+                    <th>Description</th>
+                    <th>Type</th>
+                    <th>Amount</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {ledger.map((entry) => (
+                    <tr key={entry.id}>
+                      <td>{entry.description}</td>
+                      <td>{entry.type}</td>
+                      <td>{formatCurrency(entry.amount)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+
+            <div className="panel wide-panel">
+              <h2>FBR / GST Summary</h2>
+              <table>
+                <thead>
+                  <tr>
+                    <th>Period</th>
+                    <th>Taxable</th>
+                    <th>GST</th>
+                    <th>Status</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {fbrData.map((entry) => (
+                    <tr key={entry.period}>
+                      <td>{entry.period}</td>
+                      <td>{formatCurrency(entry.taxableSales)}</td>
+                      <td>{formatCurrency(entry.gst)}</td>
+                      <td>{entry.status}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </section>
+        </>
+      )}
+    </div>
+  );
+}
+
+function StatCard({ label, value, accent }) {
+  return (
+    <div className={`stat-card ${accent}`}>
+      <span>{label}</span>
+      <strong>{value}</strong>
+    </div>
+  );
+}
+
+export default App;
